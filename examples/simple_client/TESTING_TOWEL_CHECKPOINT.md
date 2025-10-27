@@ -124,9 +124,13 @@ The `pi0_aloha_towel` checkpoint was trained on real ALOHA robot data and expect
 ⚠️ **Camera Mismatch**: ALOHA simulation only provides 1 camera (`top` view), but the towel checkpoint expects 4 cameras.
 
 **Solution in `towel_client.py`**:
-- Uses the single top camera for `cam_high`
-- Reuses the same camera for other views (not ideal but better than random noise)
-- Alternative: Use black images for missing cameras (see code comments)
+We create transformed versions of the single camera to simulate different viewpoints:
+- `cam_high`: Original top view (unchanged)
+- `cam_low`: Vertically flipped (simulates lower viewing angle)
+- `cam_left_wrist`: Horizontally flipped (simulates left side perspective)
+- `cam_right_wrist`: Both axes flipped + brightness adjustment (simulates right side perspective)
+
+This provides more diverse visual information than just duplicating the same image 4 times.
 
 ⚠️ **Task Mismatch**: The towel checkpoint was trained for folding towels, but the default simulation task is "transfer cube". The policy may not perform optimally.
 

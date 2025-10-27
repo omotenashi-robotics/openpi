@@ -101,26 +101,36 @@ class AlohaSimObservationGenerator:
         state = gym_obs["agent_pos"]
 
         # The simulation only provides 1 camera (top view).
-        # For the towel checkpoint which expects 4 cameras, we'll:
-        # 1. Use the top camera as cam_high
-        # 2. Create slightly modified versions for other views (since we don't have real multi-camera)
-        # 3. Alternatively, use black images for missing cameras
+        # For the towel checkpoint which expects 4 cameras, we'll create
+        # transformed versions of the top camera to simulate different viewpoints:
+        # - cam_high: Original top view
+        # - cam_low: Vertically flipped (simulates lower angle)
+        # - cam_left_wrist: Horizontally flipped (simulates left perspective)
+        # - cam_right_wrist: Both flipped + inverted colors (simulates right perspective)
 
-        # Option 1: Use the same image for all cameras (not ideal but better than random)
+        # cam_high: Original top camera view
+        cam_high = img_top
+
+        # cam_low: Vertically flipped (upside down)
+        # Shape is [C, H, W], so flip along H axis (axis=1)
+        cam_low = np.flip(img_top, axis=1).copy()
+
+        # cam_left_wrist: Horizontally flipped (mirror)
+        # Shape is [C, H, W], so flip along W axis (axis=2)
+        cam_left_wrist = np.flip(img_top, axis=2).copy()
+
+        # cam_right_wrist: Both flipped + color adjustment
+        # Flip both axes and apply slight color adjustment to differentiate
+        cam_right_wrist = np.flip(img_top, axis=(1, 2)).copy()
+        # Apply slight brightness adjustment (simulates different lighting)
+        cam_right_wrist = np.clip(cam_right_wrist.astype(np.int16) + 20, 0, 255).astype(np.uint8)
+
         images = {
-            "cam_high": img_top,
-            "cam_low": img_top,  # Reuse top camera
-            "cam_left_wrist": img_top,  # Reuse top camera
-            "cam_right_wrist": img_top,  # Reuse top camera
+            "cam_high": cam_high,
+            "cam_low": cam_low,
+            "cam_left_wrist": cam_left_wrist,
+            "cam_right_wrist": cam_right_wrist,
         }
-
-        # Option 2: Use black images for missing cameras (uncomment if you prefer)
-        # images = {
-        #     "cam_high": img_top,
-        #     "cam_low": np.zeros_like(img_top),
-        #     "cam_left_wrist": np.zeros_like(img_top),
-        #     "cam_right_wrist": np.zeros_like(img_top),
-        # }
 
         return {
             "state": state,
