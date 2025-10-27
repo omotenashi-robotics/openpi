@@ -8,6 +8,8 @@ This guide shows you how to test the pre-trained towel checkpoint (`gs://openpi-
 
 This approach runs the ALOHA simulation and feeds actual observations to the towel checkpoint.
 
+**Note:** The client defaults to `host=localhost` assuming the server runs on the same machine. If your server is on a different machine, use `--host <server-ip>`.
+
 ### Terminal 1: Start the Policy Server
 
 ```bash
@@ -163,6 +165,37 @@ The action shape `(25, 14)` means:
 
 ---
 
+## Network Configuration
+
+### Host Settings Explained
+
+#### Server (Policy Server)
+```bash
+# Server listens on ALL network interfaces
+uv run scripts/serve_policy.py ... # uses host="0.0.0.0" internally
+```
+- `0.0.0.0` means the server accepts connections from:
+  - ✅ Localhost (`127.0.0.1`)
+  - ✅ Other machines on the network
+  - ✅ Docker containers
+
+#### Client (Towel Client)
+```bash
+# Default: Connect to server on same machine
+python examples/simple_client/towel_client.py  # uses host="localhost" by default
+
+# Custom: Connect to server on different machine
+python examples/simple_client/towel_client.py --host 192.168.1.100
+```
+
+| Scenario | Client Host Value | Use Case |
+|----------|-------------------|----------|
+| Same machine | `localhost` or `127.0.0.1` | Default (most common) |
+| Different machine | `<server-ip>` (e.g., `192.168.1.100`) | Remote inference |
+| Docker container | `host.docker.internal` or bridge IP | Running in Docker |
+
+---
+
 ## Troubleshooting
 
 ### `gym_aloha` installation fails
@@ -193,8 +226,9 @@ MUJOCO_GL=egl python examples/simple_client/towel_client.py --use-sim
 ### Server connection fails
 
 - Verify the policy server is running in Terminal 1
-- Check both terminals use the same host/port (default: `0.0.0.0:8000`)
+- Check both terminals use the same host/port (default: `localhost:8000`)
 - Wait a few seconds for the server to fully initialize
+- If server is on a different machine, use: `--host <server-ip-address>`
 
 ### Checkpoint download is slow
 

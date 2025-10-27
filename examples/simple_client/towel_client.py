@@ -30,7 +30,7 @@ class Args:
     """Command line arguments."""
 
     # Host and port to connect to the server.
-    host: str = "0.0.0.0"
+    host: str = "localhost"
     port: int = 8000
 
     # Number of steps to run the policy for.
