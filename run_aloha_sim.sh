@@ -49,7 +49,7 @@ fi
 
 docker run -d \
   --name aloha_openpi_server \
-  --gpus device=0 \
+  --device nvidia.com/gpu=0 \
   --network host \
   -e OPENPI_DATA_HOME=/openpi_assets \
   -e IS_DOCKER=true \
@@ -69,6 +69,9 @@ if [[ "$MODE" == "aloha_sim" ]]; then
     --name aloha_runtime \
     --network host \
     --privileged \
+    --device /dev/dri:/dev/dri \
+    --group-add $(getent group render | cut -d: -f3) \
+    -e MUJOCO_GL=osmesa \
     -v "$(pwd):/app" \
     -v "$(pwd)/data:/data" \
     aloha_sim
