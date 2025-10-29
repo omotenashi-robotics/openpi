@@ -89,11 +89,11 @@ If you just want to verify the checkpoint loads correctly:
 ```bash
 cd /home/on-premise/workspaces/ash_ws/src/openpi
 
-uv run scripts/serve_policy.py 
+uv run scripts/serve_policy.py \
     --default_prompt="fold the towel" \
     policy:checkpoint \
     --policy.config=pi0_aloha_towel \
-    --policy.dir=gs://openpi-assets/checkpoints/pi0_aloha_towel \
+    --policy.dir=gs://openpi-assets/checkpoints/pi0_aloha_towel
 ```
 
 ### Terminal 2: Run the Original Simple Client
