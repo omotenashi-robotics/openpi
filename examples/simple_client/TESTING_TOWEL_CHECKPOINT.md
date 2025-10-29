@@ -16,10 +16,11 @@ This approach runs the ALOHA simulation and feeds actual observations to the tow
 cd /home/on-premise/workspaces/ash_ws/src/openpi
 
 # Serve the towel checkpoint
-uv run scripts/serve_policy.py policy:checkpoint \
+uv run scripts/serve_policy.py \
+    --default_prompt="fold the towel" \
+    policy:checkpoint \
     --policy.config=pi0_aloha_towel \
-    --policy.dir=gs://openpi-assets/checkpoints/pi0_aloha_towel \
-    --default_prompt="fold the towel"
+    --policy.dir=gs://openpi-assets/checkpoints/pi0_aloha_towel
 ```
 
 ### Terminal 2: Run the Custom Towel Client
@@ -31,6 +32,7 @@ cd /home/on-premise/workspaces/ash_ws/src/openpi
 uv pip install gym-aloha
 
 # Run with simulation observations
+MUJOCO_GL=osmesa \
 python examples/simple_client/towel_client.py \
     --use-sim \
     --prompt "fold the towel" \
@@ -49,6 +51,7 @@ The custom `towel_client.py`:
 ### Optional: Save Video Output
 
 ```bash
+MUJOCO_GL=osmesa
 python examples/simple_client/towel_client.py \
     --use-sim \
     --prompt "fold the towel" \
@@ -66,6 +69,7 @@ If you can't install `gym_aloha` or want a quick test without simulation:
 cd /home/on-premise/workspaces/ash_ws/src/openpi
 
 # Run with static observations (no simulation needed)
+MUJOCO_GL=osmesa
 python examples/simple_client/towel_client.py \
     --no-use-sim \
     --prompt "fold the towel" \
