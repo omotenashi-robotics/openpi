@@ -89,10 +89,11 @@ If you just want to verify the checkpoint loads correctly:
 ```bash
 cd /home/on-premise/workspaces/ash_ws/src/openpi
 
-uv run scripts/serve_policy.py policy:checkpoint \
+uv run scripts/serve_policy.py 
+    --default_prompt="fold the towel" \
+    policy:checkpoint \
     --policy.config=pi0_aloha_towel \
     --policy.dir=gs://openpi-assets/checkpoints/pi0_aloha_towel \
-    --default_prompt="fold the towel"
 ```
 
 ### Terminal 2: Run the Original Simple Client
@@ -102,6 +103,21 @@ cd /home/on-premise/workspaces/ash_ws/src/openpi
 
 # Run with random ALOHA observations
 uv run examples/simple_client/main.py --env ALOHA --num-steps 20
+```
+
+#### Expected Output
+```
+INFO:__main__:Server metadata: {'reset_pose': [0, -1.5, 1.5, 0, 0, 0]}
+Running policy: 100%|███████████████████████████████████████████| 20/20 [00:30<00:00,  1.53s/it]
+                                       Timing Statistics                                       
+┏━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━━┳━━━━━━━━┳━━━━━━━━┳━━━━━━━━┳━━━━━━━━┳━━━━━━━━┓
+┃ Metric               ┃   Mean ┃   Std ┃    P25 ┃    P50 ┃    P75 ┃    P90 ┃    P95 ┃    P99 ┃
+┡━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━━╇━━━━━━━━╇━━━━━━━━╇━━━━━━━━╇━━━━━━━━╇━━━━━━━━┩
+│ client_infer_ms      │ 1530.0 │ 165.1 │ 1456.4 │ 1528.7 │ 1678.1 │ 1699.5 │ 1724.0 │ 1801.4 │
+│ policy_infer_ms      │ 1264.9 │ 115.1 │ 1223.8 │ 1236.4 │ 1367.1 │ 1375.8 │ 1417.1 │ 1491.4 │
+│ server_infer_ms      │ 1524.1 │ 162.9 │ 1454.0 │ 1514.1 │ 1671.5 │ 1679.6 │ 1701.2 │ 1794.9 │
+│ server_prev_total_ms │ 1518.2 │ 161.3 │ 1455.0 │ 1515.5 │ 1657.9 │ 1684.0 │ 1724.1 │ 1801.5 │
+└──────────────────────┴────────┴───────┴────────┴────────┴────────┴────────┴────────┴────────┘
 ```
 
 ---
