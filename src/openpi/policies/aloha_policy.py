@@ -98,7 +98,18 @@ class AlohaOutputs(transforms.DataTransformFn):
     def __call__(self, data: dict) -> dict:
         # Only return the first 14 dims.
         actions = np.asarray(data["actions"][:, :14])
-        return {"actions": _encode_actions(actions, adapt_to_pi=self.adapt_to_pi)}
+
+        print(f"\n[OPENPI SERVER DEBUG] Encoding actions:")
+        print(f"  Raw actions from model shape: {actions.shape}")
+        print(f"  Raw actions[0]: {actions[0]}")
+        print(f"  Has NaN before encode: {np.any(np.isnan(actions))}")
+
+        encoded = _encode_actions(actions, adapt_to_pi=self.adapt_to_pi)
+
+        print(f"  Encoded actions[0]: {encoded[0]}")
+        print(f"  Has NaN after encode: {np.any(np.isnan(encoded))}")
+
+        return {"actions": encoded}
 
 
 def _joint_flip_mask() -> np.ndarray:
@@ -160,7 +171,21 @@ def _decode_aloha(data: dict, *, adapt_to_pi: bool = False) -> dict:
     # state is [left_arm_joint_angles, left_arm_gripper, right_arm_joint_angles, right_arm_gripper]
     # dim sizes: [6, 1, 6, 1]
     state = np.asarray(data["state"])
+
+    # DEBUG: Log incoming state values
+    print(f"\n[OPENPI SERVER DEBUG] Incoming state:")
+    print(f"  Raw state: {state}")
+    print(f"  Left gripper (idx 6): {state[6]:.6f}")
+    print(f"  Right gripper (idx 13): {state[13]:.6f}")
+    print(f"  adapt_to_pi: {adapt_to_pi}")
+
     state = _decode_state(state, adapt_to_pi=adapt_to_pi)
+
+    print(f"  After _decode_state: {state}")
+    print(f"  Left gripper after decode: {state[6]:.6f}")
+    print(f"  Right gripper after decode: {state[13]:.6f}")
+    print(f"  Has NaN: {np.any(np.isnan(state))}")
+    print(f"  Has Inf: {np.any(np.isinf(state))}")
 
     def convert_image(img):
         img = np.asarray(img)
