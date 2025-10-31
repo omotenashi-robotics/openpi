@@ -4,7 +4,7 @@ import collections
 import time
 from typing import Optional, List
 import dm_env
-from interbotix_xs_modules.arm import InterbotixManipulatorXS
+from interbotix_xs_modules.xs_robot.arm import InterbotixManipulatorXS
 from interbotix_xs_msgs.msg import JointSingleCommand
 import numpy as np
 
