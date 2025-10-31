@@ -19,11 +19,7 @@ services:
       - OPENPI_DATA_HOME=/openpi_assets
       - IS_DOCKER=true
 
+    # GPU access via CDI (Container Device Interface)
     # Comment out this block if not running on a machine with GPUs.
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    devices:
+      - nvidia.com/gpu=0
