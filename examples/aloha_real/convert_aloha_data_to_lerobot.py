@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import shutil
 from typing import Literal
+import datetime
 
 import h5py
 from lerobot.common.constants import HF_LEROBOT_HOME
@@ -31,6 +32,40 @@ class DatasetConfig:
 DEFAULT_DATASET_CONFIG = DatasetConfig()
 
 
+def _processed_log_path(repo_root: Path) -> Path:
+    return repo_root / "meta" / "processed_episodes.jsonl"
+
+def _load_processed_map(log_path: Path) -> set[str]:
+    """Return a set of raw_file paths already processed, task-agnostic."""
+    if not log_path.exists():
+        return set()
+    processed: set[str] = set()
+    with log_path.open() as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            raw_file = rec.get("raw_file")
+            if raw_file is None:
+                continue
+            processed.add(raw_file)
+    return processed
+
+
+def _append_processed(log_path: Path, task: str, raw_file: Path, frames: int) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "task": task,
+        "raw_file": str(raw_file),
+        "raw_index": raw_file.stem.split("_")[-1],
+        "frames": frames,
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+    with log_path.open("a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
 def create_empty_dataset(
     repo_id: str,
     robot_type: str,
@@ -38,7 +73,6 @@ def create_empty_dataset(
     mode: Literal["video", "image"] = "video",
     *,
     has_velocity: bool = False,
-    has_effort: bool = False,
     dataset_config: DatasetConfig = DEFAULT_DATASET_CONFIG,
 ) -> LeRobotDataset:
     motors = [
@@ -89,15 +123,6 @@ def create_empty_dataset(
             ],
         }
 
-    if has_effort:
-        features["observation.effort"] = {
-            "dtype": "float32",
-            "shape": (len(motors),),
-            "names": [
-                motors,
-            ],
-        }
-
     for cam in cameras:
         features[f"observation.images.{cam}"] = {
             "dtype": mode,
@@ -127,8 +152,11 @@ def create_empty_dataset(
 
 def get_cameras(hdf5_files: list[Path]) -> list[str]:
     with h5py.File(hdf5_files[0], "r") as ep:
-        # ignore depth channel, not currently handled
-        return [key for key in ep["/observations/images"].keys() if "depth" not in key]  # noqa: SIM118
+        return [
+            key
+            for key in ep["/observations/images"].keys()
+            if "depth" not in key and key != "cam_low"
+        ]
 
 
 def _resize_to_chw(img: np.ndarray, width: int = 640, height: int = 480) -> np.ndarray:
@@ -151,11 +179,6 @@ def _resize_to_chw(img: np.ndarray, width: int = 640, height: int = 480) -> np.n
 def has_velocity(hdf5_files: list[Path]) -> bool:
     with h5py.File(hdf5_files[0], "r") as ep:
         return "/observations/qvel" in ep
-
-
-def has_effort(hdf5_files: list[Path]) -> bool:
-    with h5py.File(hdf5_files[0], "r") as ep:
-        return "/observations/effort" in ep
 
 
 def load_raw_images_per_camera(ep: h5py.File, cameras: list[str]) -> dict[str, np.ndarray]:
@@ -217,14 +240,51 @@ def populate_dataset(
     task: str,
     cameras: list[str],
     episodes: list[int] | None = None,
+    swap_wrist_cams: bool = False,
+    processed_log: Path | None = None,
 ) -> LeRobotDataset:
     if episodes is None:
         episodes = range(len(hdf5_files))
 
     for ep_idx in tqdm.tqdm(episodes):
-        ep_path = hdf5_files[ep_idx]
+        _process_single_episode(
+            dataset,
+            ep_idx,
+            hdf5_files[ep_idx],
+            task,
+            cameras,
+            swap_wrist_cams=swap_wrist_cams,
+            processed_log=processed_log,
+        )
 
+    return dataset
+
+
+def _process_single_episode(
+    dataset: LeRobotDataset,
+    ep_idx: int,
+    ep_path: Path,
+    task: str,
+    cameras: list[str],
+    swap_wrist_cams: bool = False,
+    processed_log: Path | None = None,
+) -> None:
+    try:
         imgs_per_cam, state, action, velocity, effort = load_raw_episode_data(ep_path, cameras)
+
+        # If dataset schema expects effort but the raw file lacks it, backfill with zeros.
+        expects_effort = "observation.effort" in getattr(getattr(dataset, "meta", None), "features", {})
+        if expects_effort and effort is None:
+            effort = torch.zeros_like(state)
+
+        if swap_wrist_cams:
+            left = imgs_per_cam.pop("cam_left_wrist", None)
+            right = imgs_per_cam.pop("cam_right_wrist", None)
+            if right is not None:
+                imgs_per_cam["cam_left_wrist"] = right
+            if left is not None:
+                imgs_per_cam["cam_right_wrist"] = left
+
         num_frames = state.shape[0]
 
         for i in range(num_frames):
@@ -238,14 +298,16 @@ def populate_dataset(
 
             if velocity is not None:
                 frame["observation.velocity"] = velocity[i]
-            if effort is not None:
+            if expects_effort and effort is not None:
                 frame["observation.effort"] = effort[i]
 
             dataset.add_frame(frame)
 
         dataset.save_episode()
-
-    return dataset
+        if processed_log is not None:
+            _append_processed(processed_log, task, ep_path, num_frames)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        print(f"[warning] Skipping episode {ep_idx} ({ep_path.name}): {exc}")
 
 
 def load_dataset_append_only(
@@ -282,6 +344,7 @@ def port_aloha(
     is_mobile: bool = False,
     mode: Literal["video", "image"] = "image",
     resume: bool = False,
+    swap_wrist_cams: bool = False,
     dataset_config: DatasetConfig = DEFAULT_DATASET_CONFIG,
 ):
     repo_root = HF_LEROBOT_HOME / repo_id
@@ -293,11 +356,13 @@ def port_aloha(
     if not raw_dir.exists():
         raise ValueError(f"raw_dir does not exist: {raw_dir}")
 
-    hdf5_files = sorted(raw_dir.glob("episode_*.hdf5"))
+    hdf5_files = sorted(raw_dir.glob("episode_*.hdf5")) + sorted(raw_dir.glob("episode_*.h5"))
+    hdf5_files = sorted(set(hdf5_files))
     if not hdf5_files:
         raise ValueError(f"No episode_*.hdf5 files found under {raw_dir}")
 
     cameras = get_cameras(hdf5_files)
+    processed_log = _processed_log_path(repo_root)
 
     if resume and repo_root.exists():
         dataset = load_dataset_append_only(
@@ -312,29 +377,21 @@ def port_aloha(
             robot_type="mobile_aloha" if is_mobile else "aloha",
             cameras=cameras,
             mode=mode,
-            has_effort=has_effort(hdf5_files),
             has_velocity=has_velocity(hdf5_files),
             dataset_config=dataset_config,
         )
 
     episodes_all = episodes if episodes is not None else list(range(len(hdf5_files)))
-    if resume and (repo_root / "meta" / "episodes.jsonl").exists():
-        existing_task_count = 0
-        episodes_meta = repo_root / "meta" / "episodes.jsonl"
-        with episodes_meta.open() as f:
-            for line in f:
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if task in rec.get("tasks", []):
-                    existing_task_count += 1
-        episodes_to_run = episodes_all[existing_task_count:]
-        print(
-            f"[resume] Task '{task}' already has {existing_task_count} episodes; will process {len(episodes_to_run)} more."
-        )
-    else:
-        episodes_to_run = episodes_all
+    episodes_to_run = episodes_all
+
+    processed_set = _load_processed_map(processed_log)
+    if processed_set:
+        episodes_to_run = [
+            ep_idx for ep_idx in episodes_to_run if str(hdf5_files[ep_idx]) not in processed_set
+        ]
+        already_logged = len([p for p in hdf5_files if str(p) in processed_set])
+        if already_logged:
+            print(f"[resume] Skipping {already_logged} already-logged episodes based on raw_file paths.")
 
     dataset = populate_dataset(
         dataset,
@@ -342,6 +399,8 @@ def port_aloha(
         task=task,
         cameras=cameras,
         episodes=episodes_to_run,
+        swap_wrist_cams=swap_wrist_cams,
+        processed_log=processed_log,
     )
     # dataset.consolidate()
 
