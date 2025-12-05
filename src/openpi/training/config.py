@@ -61,6 +61,18 @@ class AssetsConfig:
 
 
 @dataclasses.dataclass(frozen=True)
+class DataSplit:
+    """Defines a deterministic split of the dataset."""
+
+    # Which subset this config refers to.
+    target: Literal["train", "val", "full"] = "train"
+    # Fraction of the dataset to allocate to the train split. The remainder is used for val.
+    train_fraction: float = 0.95
+    # Seed to make the split deterministic.
+    seed: int = 0
+
+
+@dataclasses.dataclass(frozen=True)
 class DataConfig:
     # LeRobot repo id. If None, fake data will be created.
     repo_id: str | None = None
@@ -95,6 +107,8 @@ class DataConfig:
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
     # Path to the data filter file for DROID dataset
     filter_dict_path: str | None = None
+    # Optional dataset split configuration.
+    split: DataSplit | None = None
 
 
 class GroupFactory(Protocol):
@@ -252,6 +266,8 @@ class LeRobotAlohaDataConfig(DataConfigFactory):
     )
     # Action keys that will be used to read the action sequence from the dataset.
     action_sequence_keys: Sequence[str] = ("action",)
+    # Optional dataset split configuration.
+    split: DataSplit | None = None
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -274,6 +290,7 @@ class LeRobotAlohaDataConfig(DataConfigFactory):
             data_transforms=data_transforms,
             model_transforms=model_transforms,
             action_sequence_keys=self.action_sequence_keys,
+            split=self.split,
         )
 
 
@@ -286,6 +303,8 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
     """
 
     extra_delta_transform: bool = False
+    # Optional dataset split configuration.
+    split: DataSplit | None = None
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -351,6 +370,7 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
+            split=self.split,
         )
 
 
@@ -485,6 +505,8 @@ class TrainConfig:
 
     # Determines the data to be trained on.
     data: DataConfigFactory = dataclasses.field(default_factory=FakeDataConfig)
+    # Optional separate validation data config. If not set, will fall back to using split.
+    val_data: DataConfigFactory | None = None
 
     # Base directory for config assets (e.g., norm stats).
     assets_base_dir: str = "./assets"
@@ -495,6 +517,8 @@ class TrainConfig:
     seed: int = 42
     # Global batch size.
     batch_size: int = 32
+    # Optional validation batch size. If None, will reuse batch_size.
+    val_batch_size: int | None = None
     # Number of workers to use for the data loader. Increasing this number will speed up data loading but
     # will increase memory and CPU usage.
     num_workers: int = 2

@@ -151,6 +151,20 @@ def create_torch_dataset(
     return dataset
 
 
+def _apply_split(dataset: Dataset, split: _config.DataSplit | None) -> Dataset:
+    """Optionally split the dataset into train/val subsets."""
+    if split is None or split.target == "full":
+        return dataset
+
+    generator = torch.Generator()
+    generator.manual_seed(split.seed)
+
+    train_len = int(len(dataset) * split.train_fraction)
+    val_len = len(dataset) - train_len
+    train_ds, val_ds = torch.utils.data.random_split(dataset, [train_len, val_len], generator=generator)
+    return train_ds if split.target == "train" else val_ds
+
+
 def create_rlds_dataset(
     data_config: _config.DataConfig,
     action_horizon: int,
@@ -300,6 +314,7 @@ def create_torch_data_loader(
         seed: The seed to use for shuffling the data.
     """
     dataset = create_torch_dataset(data_config, action_horizon, model_config)
+    dataset = _apply_split(dataset, data_config.split)
     dataset = transform_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats)
 
     # Use TorchDataLoader for both frameworks

@@ -147,15 +147,15 @@ def train_step(
     def loss_fn(
         model: _model.BaseModel, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions
     ):
-        chunked_loss = model.compute_loss(rng, observation, actions, train=True)
-        return jnp.mean(chunked_loss)
+        chunked_loss,l1 = model.compute_loss(rng, observation, actions, train=True)
+        return jnp.mean(chunked_loss), jnp.mean(l1)
 
     train_rng = jax.random.fold_in(rng, state.step)
     observation, actions = batch
 
     # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
-    loss, grads = nnx.value_and_grad(loss_fn, argnums=diff_state)(model, train_rng, observation, actions)
+    (loss, l1), grads = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(model, train_rng, observation, actions)
 
     params = state.params.filter(config.trainable_filter)
     updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
@@ -185,10 +185,36 @@ def train_step(
     )
     info = {
         "loss": loss,
+        "l1": l1,
         "grad_norm": optax.global_norm(grads),
         "param_norm": optax.global_norm(kernel_params),
     }
     return new_state, info
+
+
+@at.typecheck
+def eval_step(
+    config: _config.TrainConfig,
+    rng: at.KeyArrayLike,
+    state: training_utils.TrainState,
+    batch: tuple[_model.Observation, _model.Actions],
+) -> dict[str, at.Array]:
+    """Compute evaluation metrics without updating the state."""
+    params = state.ema_params or state.params
+    model = nnx.merge(state.model_def, params)
+    model.eval()
+
+    @at.typecheck
+    def loss_fn(
+        model: _model.BaseModel, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions
+    ):
+        chunked_loss, l1 = model.compute_loss(rng, observation, actions, train=False)
+        return jnp.mean(chunked_loss), jnp.mean(l1)
+
+    eval_rng = jax.random.fold_in(rng, state.step)
+    observation, actions = batch
+    loss, l1 = loss_fn(model, eval_rng, observation, actions)
+    return {"val_loss": loss, "val_l1": l1}
 
 
 def main(config: _config.TrainConfig):
@@ -226,6 +252,47 @@ def main(config: _config.TrainConfig):
     batch = next(data_iter)
     logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
 
+    # Validation data loaders (split-based and optional extra dataset).
+    val_loaders = []
+    val_batch_size = config.val_batch_size or config.batch_size
+
+    val_split = getattr(config.data, "split", None)
+    if val_split is not None:
+        try:
+            val_data_factory = dataclasses.replace(config.data, split=dataclasses.replace(val_split, target="val"))
+            val_config = dataclasses.replace(config, data=val_data_factory, batch_size=val_batch_size)
+            val_loader = _data_loader.create_data_loader(
+                val_config,
+                sharding=data_sharding,
+                shuffle=False,
+            )
+            val_loaders.append({"name": "val_split", "loader": val_loader, "iter": iter(val_loader)})
+            logging.info("Initialized validation data loader from split.")
+        except TypeError:
+            pass
+
+    if config.val_data is not None:
+        try:
+            val_config_extra = dataclasses.replace(config, data=config.val_data, batch_size=val_batch_size)
+            val_loader_extra = _data_loader.create_data_loader(
+                val_config_extra,
+                sharding=data_sharding,
+                shuffle=False,
+            )
+            val_loaders.append({"name": "val_extra", "loader": val_loader_extra, "iter": iter(val_loader_extra)})
+            logging.info("Initialized extra validation data loader.")
+        except TypeError:
+            pass
+
+    best_checkpoint_manager = None
+    if val_loaders:
+        best_checkpoint_manager, _ = _checkpoints.initialize_checkpoint_dir(
+            config.checkpoint_dir / "best",
+            keep_period=None,
+            overwrite=True,
+            resume=False,
+        )
+
     # Log images from first batch to sanity check.
     images_to_log = [
         wandb.Image(np.concatenate([np.array(img[i]) for img in batch[0].images.values()], axis=1))
@@ -246,6 +313,13 @@ def main(config: _config.TrainConfig):
         out_shardings=(train_state_sharding, replicated_sharding),
         donate_argnums=(1,),
     )
+    peval_step = None
+    if val_loaders:
+        peval_step = jax.jit(
+            functools.partial(eval_step, config),
+            in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+            out_shardings=(replicated_sharding,),
+        )
 
     start_step = int(train_state.step)
     pbar = tqdm.tqdm(
@@ -256,6 +330,7 @@ def main(config: _config.TrainConfig):
     )
 
     infos = []
+    best_val_metric = float("inf")
     for step in pbar:
         with sharding.set_mesh(mesh):
             train_state, info = ptrain_step(train_rng, train_state, batch)
@@ -267,6 +342,31 @@ def main(config: _config.TrainConfig):
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
             infos = []
+
+            # Run a single validation step if available.
+            if peval_step is not None:
+                val_metrics = {}
+                for val_entry in val_loaders:
+                    try:
+                        val_batch = next(val_entry["iter"])
+                    except StopIteration:
+                        val_entry["iter"] = iter(val_entry["loader"])
+                        val_batch = next(val_entry["iter"])
+                    val_info = peval_step(train_rng, train_state, val_batch)
+                    val_info = jax.device_get(val_info)
+                    val_info = {f'{val_entry["name"]}_{k}': v for k, v in val_info.items()}
+                    val_metrics.update(val_info)
+                    wandb.log(val_info, step=step)
+                    pbar.write(", ".join(f"{k}={v:.4f}" for k, v in val_info.items()))
+                if best_checkpoint_manager is not None:
+                    best_candidate = None
+                    if "val_extra_loss" in val_metrics:
+                        best_candidate = float(val_metrics["val_extra_loss"])
+                    elif "val_split_loss" in val_metrics:
+                        best_candidate = float(val_metrics["val_split_loss"])
+                    if best_candidate is not None and best_candidate < best_val_metric:
+                        best_val_metric = best_candidate
+                        _checkpoints.save_state(best_checkpoint_manager, train_state, data_loader, step)
         batch = next(data_iter)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
@@ -274,6 +374,9 @@ def main(config: _config.TrainConfig):
 
     logging.info("Waiting for checkpoint manager to finish")
     checkpoint_manager.wait_until_finished()
+    if best_checkpoint_manager is not None:
+        logging.info("Waiting for best checkpoint manager to finish")
+        best_checkpoint_manager.wait_until_finished()
 
 
 if __name__ == "__main__":
